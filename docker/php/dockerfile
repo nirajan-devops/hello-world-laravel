@@ -1,0 +1,29 @@
+# docker/php/Dockerfile  — production target
+# ---------- builder stage ----------
+FROM composer:2.7 as composer
+WORKDIR /app
+COPY composer.json composer.lock ./
+RUN composer install --no-dev --prefer-dist --optimize-autoloader --no-interaction
+
+# ---------- runtime stage ----------
+FROM php:8.2-fpm-alpine
+
+# PHP extensions you actually need
+RUN apk add --no-cache icu-data-full zlib libpng libjpeg-turbo libxml2 \
+ && docker-php-ext-install intl opcache pdo_mysql
+
+WORKDIR /var/www
+# bring in vendor first (better layer‑cache hit rate)
+COPY --from=composer /app/vendor /var/www/vendor
+# now copy the rest of the source
+COPY . /var/www
+
+
+
+ # Cache configs, routes, views, events, then set writable perms
+RUN php artisan optimize \
+    && chown -R www-data:www-data storage bootstrap/cache
+
+
+USER www-data
+CMD ["php-fpm", "-y", "/usr/local/etc/php-fpm.conf", "-R"]

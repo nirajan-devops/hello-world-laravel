@@ -1,0 +1,11 @@
+name: Reuse Laravel CI Workflow
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  call-laravel-ci:
+    uses: nirajan-devops/ci-workflows/.github/workflows/laravel.yml@main
