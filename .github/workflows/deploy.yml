@@ -1,122 +1,145 @@
-name: Build & Deploy Laravel to EC2 via ECR
+name: Deploy Laravel to AWS ECS
 
 on:
   push:
     branches: [ main ]
 
 env:
-  AWS_REGION: ap-south-1                      ## ⬅ change if needed
-  ECR_REPO:  laravel/hello-laravel                   # ⬅ your ECR repo name
-  IMAGE_TAG: ${{ github.sha }}               # use commit SHA for immutability
+  AWS_REGION: ap-south-1
+  ECR_REPOSITORY: laravel/hello-laravel
+  ECS_CLUSTER: laravel-cluster
+  ECS_SERVICE: laravel-service
+  DOCKERFILE_PATH: docker/php/Dockerfile
 
 jobs:
-  build-push:
+  deploy:
     runs-on: ubuntu-latest
-    permissions:
-      #id-token: write        # for OIDC (comment if using access keys)
-      contents: read
+    environment: production
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-      # ---------- AWS AUTH (choose ONE) ----------
-      # Preferred: OIDC (no long-lived secrets)
-      #- name: Configure AWS credentials (OIDC)
-        #uses: aws-actions/configure-aws-credentials@v4
-        #with:
-          #aws-region: ${{ env.AWS_REGION }}
-          #role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-
-      # ─── OR ───
-      # If you prefer static keys, comment the block above and UNcomment this:
-      - name: Configure AWS credentials (keys)
+      - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          aws-region: ${{ env.AWS_REGION }}
-          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
 
-      # ---------- LOGIN TO ECR ----------
       - name: Login to Amazon ECR
         id: login-ecr
-        uses: aws-actions/amazon-ecr-login@v2
+        uses: aws-actions/amazon-ecr-login@v1
 
-      # ---------- BUILD + PUSH ----------
-      - name: Build & push image
-        uses: docker/build-push-action@v5
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Cache Docker layers
+        uses: actions/cache@v3
         with:
-          context: .
-          file: docker/php/Dockerfile           # path to your production Dockerfile
-          push: true
-          tags: |
-            ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPO }}:${{ env.IMAGE_TAG }}
-            ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPO }}:latest
-          provenance: false                 # speeds logs a bit
-          build-args: |
-            BUILDKIT_PROGRESS=plain         # ← shows all compiler output  
+          path: /tmp/.buildx-cache
+          key: ${{ runner.os }}-buildx-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-buildx-
 
-  deploy:
-    needs: build-push
-    runs-on: ubuntu-latest
-    steps:
-      # ---------- UPLOAD COMPOSE + CONFIGS TO EC2 ----------
-      - name: Copy artefacts to EC2
-        uses: appleboy/scp-action@v0.1.7
+      - name: Build Docker image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        run: |
+          docker build \
+            --file ${{ env.DOCKERFILE_PATH }} \
+            --tag $ECR_REGISTRY/$ECR_REPOSITORY:${{ github.sha }} \
+            --tag $ECR_REGISTRY/$ECR_REPOSITORY:latest \
+            --build-arg BUILDKIT_INLINE_CACHE=1 \
+            --cache-from=type=local,src=/tmp/.buildx-cache \
+            --cache-to=type=local,dest=/tmp/.buildx-cache-new \
+            .
+          rm -rf /tmp/.buildx-cache
+          mv /tmp/.buildx-cache-new /tmp/.buildx-cache
+
+      - name: Push Docker image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        run: |
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:${{ github.sha }}
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
+
+      - name: Install dependencies for task definition
+        run: |
+          sudo apt-get update && sudo apt-get install -y jq
+
+      - name: Generate task definition
+        id: task-def
+        run: |
+          cat <<EOF > task-definition.json
+          {
+            "family": "laravel-task",
+            "networkMode": "awsvpc",
+            "executionRoleArn": "${{ secrets.ECS_TASK_EXECUTION_ROLE_ARN }}",
+            "containerDefinitions": [
+              {
+                "name": "laravel-app",
+                "image": "${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:latest",
+                "essential": true,
+                "portMappings": [
+                  {
+                    "containerPort": 9000,
+                    "protocol": "tcp"
+                  }
+                ],
+                "environment": [
+                  {
+                    "name": "APP_ENV",
+                    "value": "production"
+                  }
+                ],
+                "secrets": [
+                  {
+                    "name": "APP_KEY",
+                    "valueFrom": "${{ secrets.APP_KEY_ARN }}"
+                  },
+                  {
+                    "name": "DB_PASSWORD",
+                    "valueFrom": "${{ secrets.DB_PASSWORD_ARN }}"
+                  }
+                ],
+                "logConfiguration": {
+                  "logDriver": "awslogs",
+                  "options": {
+                    "awslogs-group": "/ecs/laravel-app",
+                    "awslogs-region": "${{ env.AWS_REGION }}",
+                    "awslogs-stream-prefix": "ecs"
+                  }
+                }
+              }
+            ],
+            "requiresCompatibilities": ["FARGATE"],
+            "cpu": "1024",
+            "memory": "2048"
+          }
+          EOF
+          echo "TASK_DEFINITION=$(cat task-definition.json | jq -c)" >> $GITHUB_OUTPUT
+
+      - name: Deploy to ECS
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v1
         with:
-          host:       ${{ secrets.SSH_HOST }}
-          username:   ${{ secrets.SSH_USER }}
-          key:        ${{ secrets.SSH_KEY }}
-          source: |
-            docker-compose.yml,
-            docker/nginx/default.conf,
-            .env
-          target: /home/${{ secrets.SSH_USER }}/deploy
-          overwrite: true
+          task-definition: ${{ steps.task-def.outputs.TASK_DEFINITION }}
+          cluster: ${{ env.ECS_CLUSTER }}
+          service: ${{ env.ECS_SERVICE }}
+          wait-for-service-stability: true
+          force-new-deployment: true
 
-      # ---------- BOOTSTRAP & DEPLOY ----------
-      - name: Bootstrap & Deploy on EC2
-        uses: appleboy/ssh-action@v1.2.0
-        with:
-          host:     ${{ secrets.SSH_HOST }}
-          username: ${{ secrets.SSH_USER }}
-          key:      ${{ secrets.SSH_KEY }}
-          envs:     AWS_REGION,AWS_ECR_REGISTRY,ECR_REPO,IMAGE_TAG
-          script: |
-            set -e
-            echo "== 0) Ensure base packages =="
-            if ! command -v docker >/dev/null 2>&1; then
-              sudo apt-get update -y
-              sudo apt-get install -y docker.io
-              sudo systemctl enable --now docker
-            fi
-            if ! docker compose version >/dev/null 2>&1; then
-              sudo mkdir -p /usr/local/lib/docker/cli-plugins
-              sudo curl -fsSL \
-                https://github.com/docker/compose/releases/download/v2.29.2/docker-compose-linux-x86_64 \
-                -o /usr/local/lib/docker/cli-plugins/docker-compose
-              sudo chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
-            fi
-            if ! command -v aws >/dev/null 2>&1; then
-              sudo apt-get install -y awscli
-            fi
-            if ! id -nG | grep -qw docker; then
-              sudo usermod -aG docker $USER
-            fi
-
-            echo "== 1) Sync artefacts into /opt/hello-world-laravel =="
-            sudo mkdir -p /opt/hello-world-laravel
-            sudo chown -R $USER:$USER /opt/hello-world-laravel
-            rsync -a --delete ~/deploy/ /opt/hello-world-laravel/
-            cd /opt/hello-world-laravel
-
-            echo "== 2) ECR login & pull image =="
-            aws ecr get-login-password --region $AWS_REGION \
-              | docker login -u AWS --password-stdin ${{ secrets.AWS_ECR_REGISTRY }}
-            docker compose -f docker-compose.prod.yml pull
-
-            echo "== 3) Start / update services =="
-            docker compose -f docker-compose.prod.yml up -d --remove-orphans
-            docker image prune -f
-
-            echo "== 4) Stack status =="
-            docker compose ps
+      - name: Run database migrations
+        run: |
+          TASK_ARN=$(aws ecs run-task \
+            --cluster ${{ env.ECS_CLUSTER }} \
+            --task-definition laravel-task \
+            --launch-type FARGATE \
+            --network-configuration "awsvpcConfiguration={subnets=[${{ secrets.SUBNET_IDS }}],securityGroups=[${{ secrets.SECURITY_GROUP_IDS }}],assignPublicIp=ENABLED}" \
+            --overrides '{"containerOverrides": [{"name": "laravel-app", "command": ["php", "artisan", "migrate", "--force"]}]}' \
+            --query "tasks[0].taskArn" \
+            --output text)
+          
+          aws ecs wait tasks-stopped \
+            --cluster ${{ env.ECS_CLUSTER }} \
+            --tasks $TASK_ARN

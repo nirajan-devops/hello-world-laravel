@@ -1,4 +1,4 @@
-# docker/php/Dockerfile  — production target
+# docker/php/Dockerfile — production target
 # ---------- builder stage ----------
 FROM composer:2.7 AS composer
 WORKDIR /app
@@ -7,12 +7,17 @@ WORKDIR /app
 RUN apk add --no-cache icu-data-full icu-dev zlib libzip-dev \
  && docker-php-ext-install intl pdo_mysql
 
-# 2) Copy manifest & (optionally) lock file
-COPY composer.json composer.lock* ./
+# 2) Copy ONLY the files Composer needs first
+COPY composer.json composer.lock artisan ./
 
-# 3) Install production deps
-RUN composer install --no-dev --prefer-dist --optimize-autoloader --no-interaction
+# 3) Install production deps (skip post-install scripts)
+RUN composer install --no-dev --prefer-dist --optimize-autoloader --no-interaction --no-scripts
 
+# 4) Now copy the rest of the application
+COPY . .
+
+# 5) Run post-install scripts with full app context
+RUN composer run-script post-autoload-dump
 
 # ---------- runtime stage ----------
 FROM php:8.2-fpm-alpine
@@ -22,18 +27,17 @@ RUN apk add --no-cache --virtual .build-deps \
         icu-dev libpng-dev jpeg-dev libxml2-dev zlib-dev \
     && apk add --no-cache icu-data-full libpng libjpeg-turbo libxml2 zlib \
     && docker-php-ext-install intl opcache pdo_mysql \
-    && apk del .build-deps              # remove 25‑MB build toolchain
+    && apk del .build-deps
 
 WORKDIR /var/www
 
-# bring in vendor first
+# Copy vendor from builder
 COPY --from=composer /app/vendor /var/www/vendor
-# now copy the rest of the source
-COPY . /var/www
+# Copy application files
+COPY --from=composer /app /var/www
 
 RUN php artisan optimize \
  && chown -R www-data:www-data storage bootstrap/cache
 
 USER www-data
 CMD ["php-fpm", "-y", "/usr/local/etc/php-fpm.conf", "-R"]
-

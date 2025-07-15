@@ -3,6 +3,9 @@ version: '3.8'
 services:
   php-fpm:
     image: 405045611801.dkr.ecr.ap-south-1.amazonaws.com/laravel/hello-laravel
+    build:
+      context: .
+      dockerfile: docker/php/Dockerfile
   app:
     image: php:8.2-fpm
     container_name: laravel_app
