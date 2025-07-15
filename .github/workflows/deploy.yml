@@ -51,6 +51,9 @@ jobs:
           tags: |
             ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPO }}:${{ env.IMAGE_TAG }}
             ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPO }}:latest
+          provenance: false                 # speeds logs a bit
+          build-args: |
+            BUILDKIT_PROGRESS=plain         # ← shows all compiler output  
 
   deploy:
     needs: build-push

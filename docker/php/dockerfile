@@ -17,22 +17,23 @@ RUN composer install --no-dev --prefer-dist --optimize-autoloader --no-interacti
 # ---------- runtime stage ----------
 FROM php:8.2-fpm-alpine
 
-# PHP extensions you actually need
-RUN apk add --no-cache icu-data-full zlib libpng libjpeg-turbo libxml2 \
- && docker-php-ext-install intl opcache pdo_mysql
+# 1) Add build dependencies & runtime libs in one shot
+RUN apk add --no-cache --virtual .build-deps \
+        icu-dev libpng-dev jpeg-dev libxml2-dev zlib-dev \
+    && apk add --no-cache icu-data-full libpng libjpeg-turbo libxml2 zlib \
+    && docker-php-ext-install intl opcache pdo_mysql \
+    && apk del .build-deps              # remove 25‑MB build toolchain
 
 WORKDIR /var/www
-# bring in vendor first (better layer‑cache hit rate)
+
+# bring in vendor first
 COPY --from=composer /app/vendor /var/www/vendor
 # now copy the rest of the source
 COPY . /var/www
 
-
-
- # Cache configs, routes, views, events, then set writable perms
 RUN php artisan optimize \
-    && chown -R www-data:www-data storage bootstrap/cache
-
+ && chown -R www-data:www-data storage bootstrap/cache
 
 USER www-data
 CMD ["php-fpm", "-y", "/usr/local/etc/php-fpm.conf", "-R"]
+
