@@ -53,8 +53,8 @@ jobs:
 
             # --- write .env from GitHub secret ---
             cat <<'EOF' > $HOME/deploy/.env
-             ${{ secrets.LARAVEL_ENV }}
-             EOF
+          ${{ secrets.LARAVEL_ENV }}
+          EOF
 
             cd $HOME/deploy
 
