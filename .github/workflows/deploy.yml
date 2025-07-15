@@ -31,42 +31,63 @@ jobs:
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v1
 
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
+        with:
+          driver-opts: |
+            image=moby/buildkit:master
+          install: true
+         
 
+      - name: Create builder instance
+        id: buildx
+        run: |
+          docker buildx create \
+            --name mybuilder \
+            --driver docker-container \
+            --use
+          docker buildx inspect --bootstrap
       - name: Cache Docker layers
         uses: actions/cache@v3
         with:
           path: /tmp/.buildx-cache
           key: ${{ runner.os }}-buildx-${{ github.sha }}
           restore-keys: |
-            ${{ runner.os }}-buildx-
+            ${{ runner.os }}-buildx-    
 
-      - name: Build Docker image
+      - name: Build Docker image with cache
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
         run: |
-          docker build \
+          docker buildx build \
             --file ${{ env.DOCKERFILE_PATH }} \
             --tag $ECR_REGISTRY/$ECR_REPOSITORY:${{ github.sha }} \
             --tag $ECR_REGISTRY/$ECR_REPOSITORY:latest \
-            --build-arg BUILDKIT_INLINE_CACHE=1 \
-            --cache-from=type=local,src=/tmp/.buildx-cache \
-            --cache-to=type=local,dest=/tmp/.buildx-cache-new \
+            --platform linux/amd64 \
+            --output type=image,push=false \
+            --cache-from type=gha \
+            --cache-to type=gha,mode=max \
+            --progress plain \
             .
-          rm -rf /tmp/.buildx-cache
-          mv /tmp/.buildx-cache-new /tmp/.buildx-cache
 
       - name: Push Docker image
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
         run: |
-          docker push $ECR_REGISTRY/$ECR_REPOSITORY:${{ github.sha }}
-          docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
+          docker buildx build \
+            --file ${{ env.DOCKERFILE_PATH }} \
+            --tag $ECR_REGISTRY/$ECR_REPOSITORY:${{ github.sha }} \
+            --tag $ECR_REGISTRY/$ECR_REPOSITORY:latest \
+            --platform linux/amd64 \
+            --push \
+            .
 
+      # Rest of your deployment steps (task definition, ECS deploy, etc.)
       - name: Install dependencies for task definition
-        run: |
-          sudo apt-get update && sudo apt-get install -y jq
+        run: sudo apt-get update && sudo apt-get install -y jq
 
       - name: Generate task definition
         id: task-def
@@ -79,7 +100,7 @@ jobs:
             "containerDefinitions": [
               {
                 "name": "laravel-app",
-                "image": "${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:latest",
+                "image": "${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}",
                 "essential": true,
                 "portMappings": [
                   {
@@ -91,16 +112,6 @@ jobs:
                   {
                     "name": "APP_ENV",
                     "value": "production"
-                  }
-                ],
-                "secrets": [
-                  {
-                    "name": "APP_KEY",
-                    "valueFrom": "${{ secrets.APP_KEY_ARN }}"
-                  },
-                  {
-                    "name": "DB_PASSWORD",
-                    "valueFrom": "${{ secrets.DB_PASSWORD_ARN }}"
                   }
                 ],
                 "logConfiguration": {
@@ -127,19 +138,3 @@ jobs:
           cluster: ${{ env.ECS_CLUSTER }}
           service: ${{ env.ECS_SERVICE }}
           wait-for-service-stability: true
-          force-new-deployment: true
-
-      - name: Run database migrations
-        run: |
-          TASK_ARN=$(aws ecs run-task \
-            --cluster ${{ env.ECS_CLUSTER }} \
-            --task-definition laravel-task \
-            --launch-type FARGATE \
-            --network-configuration "awsvpcConfiguration={subnets=[${{ secrets.SUBNET_IDS }}],securityGroups=[${{ secrets.SECURITY_GROUP_IDS }}],assignPublicIp=ENABLED}" \
-            --overrides '{"containerOverrides": [{"name": "laravel-app", "command": ["php", "artisan", "migrate", "--force"]}]}' \
-            --query "tasks[0].taskArn" \
-            --output text)
-          
-          aws ecs wait tasks-stopped \
-            --cluster ${{ env.ECS_CLUSTER }} \
-            --tasks $TASK_ARN
