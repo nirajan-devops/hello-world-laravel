@@ -5,7 +5,7 @@ on:
     branches: [ main ]
 
 env:
-  AWS_REGION: ap-south-1                      # ⬅ change if needed
+  AWS_REGION: ap-south-1                      ## ⬅ change if needed
   ECR_REPO:  laravel/hello-laravel                   # ⬅ your ECR repo name
   IMAGE_TAG: ${{ github.sha }}               # use commit SHA for immutability
 
