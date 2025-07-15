@@ -37,9 +37,9 @@ jobs:
           username: ${{ secrets.USERNAME }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           source: |
-            docker-compose.yml,
-            docker/nginx/default.conf,
-            .env,
+            docker-compose.yml
+            docker/nginx/default.conf
+            .env
             hello-laravel.tar.gz
           target: /home/${{ secrets.USERNAME }}/deploy
           overwrite: true
