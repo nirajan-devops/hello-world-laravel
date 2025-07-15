@@ -73,13 +73,13 @@ jobs:
             fi
 
             echo "=== Load the new Laravel image ==="
-            gunzip -c hello-laravel.tar.gz | docker load
+            gunzip -c hello-laravel.tar.gz | sudo docker load
 
             echo "=== Bring containers up (or recreate) ==="
             docker compose -f docker-compose.yml up -d --pull=never --remove-orphans
 
             echo "=== Prune dangling images ==="
-            docker image prune -f
+            sudodocker image prune -f
 
             echo "=== Show container status ==="
-            docker compose ps
+            sudo docker compose ps
