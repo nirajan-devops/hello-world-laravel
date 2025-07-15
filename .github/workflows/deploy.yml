@@ -1,131 +1,85 @@
-name: Deploy Laravel to AWS ECS
+name: Build & Deploy Laravel Application
 
 on:
   push:
     branches: [ main ]
 
-env:
-  ECS_TASK_DEFINITION_FILE: .aws/task-definition.json  # #File to save the task definition
-  AWS_REGION: ap-south-1
-  ECR_REPOSITORY: laravel/hello-laravel
-  ECS_CLUSTER: laravelcluster
-  ECS_SERVICE: laravel-service
-  DOCKERFILE_PATH: docker/php/Dockerfile
-
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    environment: production
+    timeout-minutes: 30
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
+      # 1️⃣ Build the Laravel image (multi‑stage Dockerfile)
+      - name: Build Laravel image
+        run: docker build -t hello-laravel -f docker/php/Dockerfile .
+
+      # 2️⃣ Save & compress for scp transfer (~80 MB after gzip)
+      - name: Save & compress Docker image
+        run: docker save hello-laravel | gzip > hello-laravel.tar.gz
+
+      # 3️⃣ Verify repo contains the deploy artefacts we expect
+      - name: Verify local files before upload
+        run: |
+          echo "Repo tree:" && ls -R
+          echo "Checking required files…"
+          [ -f docker-compose.prod.yml ] || { echo "docker-compose.prod.yml missing"; exit 1; }
+          [ -f docker/nginx/default.conf ] || { echo "Nginx conf missing"; exit 1; }
+          [ -f hello-laravel.tar.gz ] || { echo "Image archive missing"; exit 1; }
+
+      # 4️⃣ Copy compose file, nginx config, .env & image to EC2
+      - name: Upload artefacts to EC2
+        uses: appleboy/scp-action@v0.1.7
         with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ env.AWS_REGION }}
+          host: ${{ secrets.HOST }}
+          username: ${{ secrets.USERNAME }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          source: |
+            docker-compose.prod.yml,
+            docker/nginx/default.conf,
+            .env,
+            hello-laravel.tar.gz
+          target: /home/${{ secrets.USERNAME }}/deploy
+          overwrite: true
 
-      - name: Login to Amazon ECR
-        id: login-ecr
-        uses: aws-actions/amazon-ecr-login@v1
+      # (Optional) ─ copy any other project files you want on the VM
+      # e.g. cron jobs, scripts, etc.
 
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+      # 5️⃣ SSH in, load image, & start / update the stack
+      - name: Deploy on EC2
+        uses: appleboy/ssh-action@v1.2.0
         with:
-          driver-opts: |
-            image=moby/buildkit:master
-          install: true
+          host: ${{ secrets.HOST }}
+          username: ${{ secrets.USERNAME }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            set -e
+            cd $HOME/deploy
 
-      - name: Create builder instance
-        id: buildx
-        run: |
-          docker buildx create \
-            --name mybuilder \
-            --driver docker-container \
-            --use
-          docker buildx inspect --bootstrap
+            echo "=== Ensure Docker & Compose v2 are present ==="
+            if ! command -v docker >/dev/null; then
+              sudo apt-get update -y
+              sudo apt-get install -y docker.io
+              sudo systemctl enable --now docker
+              sudo usermod -aG docker $USER
+            fi
+            if ! docker compose version >/dev/null 2>&1; then
+              sudo mkdir -p /usr/local/lib/docker/cli-plugins
+              sudo curl -sSL https://github.com/docker/compose/releases/download/v2.29.2/docker-compose-linux-x86_64 \
+                   -o /usr/local/lib/docker/cli-plugins/docker-compose
+              sudo chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
+            fi
 
-      - name: Build Docker image with cache
-        env:
-          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-        run: |
-          docker buildx build \
-            --file ${{ env.DOCKERFILE_PATH }} \
-            --tag $ECR_REGISTRY/$ECR_REPOSITORY:${{ github.sha }} \
-            --tag $ECR_REGISTRY/$ECR_REPOSITORY:latest \
-            --platform linux/amd64 \
-            --output type=image,push=false \
-            --cache-from type=gha \
-            --cache-to type=gha,mode=max \
-            --progress plain \
-            .
+            echo "=== Load the new Laravel image ==="
+            gunzip -c hello-laravel.tar.gz | docker load
 
-      - name: Push Docker image
-        env:
-          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-        run: |
-          docker buildx build \
-            --file ${{ env.DOCKERFILE_PATH }} \
-            --tag $ECR_REGISTRY/$ECR_REPOSITORY:${{ github.sha }} \
-            --tag $ECR_REGISTRY/$ECR_REPOSITORY:latest \
-            --platform linux/amd64 \
-            --push \
-            .
+            echo "=== Bring containers up (or recreate) ==="
+            docker compose -f docker-compose.prod.yml up -d --pull=never --remove-orphans
 
-      - name: Install dependencies for task definition
-        run: sudo apt-get update && sudo apt-get install -y jq
+            echo "=== Prune dangling images ==="
+            docker image prune -f
 
-      - name: Generate task definition file
-        run: |
-          mkdir -p .aws
-          cat <<EOF > ${{ env.ECS_TASK_DEFINITION_FILE }}
-          {
-            "family": "laravel-task",
-            "networkMode": "awsvpc",
-            "executionRoleArn": "${{ secrets.ECS_TASK_EXECUTION_ROLE_ARN }}",
-            "containerDefinitions": [
-              {
-                "name": "laravel-app",
-                "image": "${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}",
-                "essential": true,
-                "portMappings": [
-                  {
-                    "containerPort": 9000,
-                    "protocol": "tcp"
-                  }
-                ],
-                "environment": [
-                  {
-                    "name": "APP_ENV",
-                    "value": "production"
-                  }
-                ],
-                "logConfiguration": {
-                  "logDriver": "awslogs",
-                  "options": {
-                    "awslogs-group": "/ecs/laravel-app",
-                    "awslogs-region": "${{ env.AWS_REGION }}",
-                    "awslogs-stream-prefix": "ecs"
-                  }
-                }
-              }
-            ],
-            "requiresCompatibilities": ["FARGATE"],
-            "cpu": "1024",
-            "memory": "2048"
-          }
-          EOF
-
-      - name: Deploy to ECS
-        uses: aws-actions/amazon-ecs-deploy-task-definition@v1
-        with:
-          task-definition: ${{ env.ECS_TASK_DEFINITION_FILE }}
-          cluster: ${{ env.ECS_CLUSTER }}
-          service: ${{ env.ECS_SERVICE }}
-          wait-for-service-stability: true
+            echo "=== Show container status ==="
+            docker compose ps
