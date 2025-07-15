@@ -5,7 +5,7 @@ on:
     branches: [ main ]
 
 env:
-  ECS_TASK_DEFINITION_FILE: .aws/task-definition.json  # File to save the task definition
+  ECS_TASK_DEFINITION_FILE: .aws/task-definition.json  # #File to save the task definition
   AWS_REGION: ap-south-1
   ECR_REPOSITORY: laravel/hello-laravel
   ECS_CLUSTER: laravelcluster
