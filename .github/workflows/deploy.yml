@@ -25,7 +25,7 @@ jobs:
         run: |
           echo "Repo tree:" && ls -R
           echo "Checking required files…"
-          [ -f docker-compose.prod.yml ] || { echo "docker-compose.prod.yml missing"; exit 1; }
+          [ -f docker-compose.yml ] || { echo "docker-compose.yml missing"; exit 1; }
           [ -f docker/nginx/default.conf ] || { echo "Nginx conf missing"; exit 1; }
           [ -f hello-laravel.tar.gz ] || { echo "Image archive missing"; exit 1; }
 
@@ -37,7 +37,7 @@ jobs:
           username: ${{ secrets.USERNAME }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           source: |
-            docker-compose.prod.yml,
+            docker-compose.yml,
             docker/nginx/default.conf,
             .env,
             hello-laravel.tar.gz
@@ -76,7 +76,7 @@ jobs:
             gunzip -c hello-laravel.tar.gz | docker load
 
             echo "=== Bring containers up (or recreate) ==="
-            docker compose -f docker-compose.prod.yml up -d --pull=never --remove-orphans
+            docker compose -f docker-compose.yml up -d --pull=never --remove-orphans
 
             echo "=== Prune dangling images ==="
             docker image prune -f
