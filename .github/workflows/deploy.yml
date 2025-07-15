@@ -1,4 +1,4 @@
-name: Build & Deploy Laravel Application
+name: Build & Deploy Laravel Application
 
 on:
   push:
@@ -16,55 +16,62 @@ jobs:
       - name: Build Laravel image
         run: docker build -t hello-laravel -f docker/php/Dockerfile .
 
-      # 2️⃣ Save & compress for scp transfer (~80 MB after gzip)
+      # 2️⃣ Save & compress for scp transfer
       - name: Save & compress Docker image
         run: docker save hello-laravel | gzip > hello-laravel.tar.gz
 
-      # 3️⃣ Verify repo contains the deploy artefacts we expect
-      - name: Verify local files before upload
+      # 3️⃣ Sanity‑check artefacts exist
+      - name: Verify local files
         run: |
-          echo "Repo tree:" && ls -R
-          echo "Checking required files…"
-          [ -f docker-compose.yml ] || { echo "docker-compose.yml missing"; exit 1; }
-          [ -f docker/nginx/default.conf ] || { echo "Nginx conf missing"; exit 1; }
-          [ -f hello-laravel.tar.gz ] || { echo "Image archive missing"; exit 1; }
+          set -e
+          [ -f docker-compose.yml ]              || { echo "docker-compose.yml missing"; exit 1; }
+          [ -f docker/nginx/default.conf ]       || { echo "Nginx conf missing"; exit 1; }
+          [ -f hello-laravel.tar.gz ]            || { echo "Image archive missing"; exit 1; }
 
-      # 4️⃣ Copy compose file, nginx config, .env & image to EC2
+      # 4️⃣ Upload compose file, Nginx config and image to EC2
       - name: Upload artefacts to EC2
         uses: appleboy/scp-action@v0.1.7
         with:
-          host: ${{ secrets.HOST }}
-          username: ${{ secrets.USERNAME }}
-          key: ${{ secrets.SSH_PRIVATE_KEY }}
-          source: "docker-compose.yml,docker/nginx/default.conf,.env,hello-laravel.tar.gz"
+          host:       ${{ secrets.HOST }}
+          username:   ${{ secrets.USERNAME }}
+          key:        ${{ secrets.SSH_PRIVATE_KEY }}
+          source: |
+            docker-compose.yml
+            docker/nginx/default.conf
+            hello-laravel.tar.gz
           target: /home/${{ secrets.USERNAME }}/deploy
           overwrite: true
 
-      ## (Optional) ─ copy any other project files you want on the VM
-      # e.g. cron jobs, scripts, etc.
-
-      # 5️⃣ SSH in, load image, & start / update the stack
+      # 5️⃣ SSH → re‑create .env from secret, load image, start stack
       - name: Deploy on EC2
         uses: appleboy/ssh-action@v1.2.0
         with:
-          host: ${{ secrets.HOST }}
-          username: ${{ secrets.USERNAME }}
-          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          host:       ${{ secrets.HOST }}
+          username:   ${{ secrets.USERNAME }}
+          key:        ${{ secrets.SSH_PRIVATE_KEY }}
+          envs:       LARAVEL_ENV
           script: |
             set -e
+            mkdir -p $HOME/deploy
+
+            # --- write .env from GitHub secret ---
+            cat <<'EOF' > $HOME/deploy/.env
+             ${{ secrets.LARAVEL_ENV }}
+             EOF
+
             cd $HOME/deploy
 
             echo "=== Ensure Docker & Compose v2 are present ==="
-            if ! command -v docker >/dev/null; then
+            if ! command -v docker >/dev/null 2>&1; then
               sudo apt-get update -y
               sudo apt-get install -y docker.io
               sudo systemctl enable --now docker
-              sudo usermod -aG docker $USER
             fi
             if ! docker compose version >/dev/null 2>&1; then
               sudo mkdir -p /usr/local/lib/docker/cli-plugins
-              sudo curl -sSL https://github.com/docker/compose/releases/download/v2.29.2/docker-compose-linux-x86_64 \
-                   -o /usr/local/lib/docker/cli-plugins/docker-compose
+              sudo curl -fsSL \
+                https://github.com/docker/compose/releases/download/v2.29.2/docker-compose-linux-x86_64 \
+                -o /usr/local/lib/docker/cli-plugins/docker-compose
               sudo chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
             fi
 
@@ -72,10 +79,10 @@ jobs:
             gunzip -c hello-laravel.tar.gz | sudo docker load
 
             echo "=== Bring containers up (or recreate) ==="
-            docker compose -f docker-compose.yml up -d --pull=never --remove-orphans
+            sudo docker compose -f docker-compose.yml up -d --pull=never --remove-orphans
 
             echo "=== Prune dangling images ==="
-            sudodocker image prune -f
+            sudo docker image prune -f
 
             echo "=== Show container status ==="
             sudo docker compose ps
