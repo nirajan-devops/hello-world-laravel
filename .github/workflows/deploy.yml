@@ -8,7 +8,7 @@ env:
   ECS_TASK_DEFINITION_FILE: .aws/task-definition.json  # File to save the task definition
   AWS_REGION: ap-south-1
   ECR_REPOSITORY: laravel/hello-laravel
-  ECS_CLUSTER: laravel-cluster
+  ECS_CLUSTER: laravelcluster
   ECS_SERVICE: laravel-service
   DOCKERFILE_PATH: docker/php/Dockerfile
 
