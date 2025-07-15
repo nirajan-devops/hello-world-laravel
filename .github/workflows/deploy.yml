@@ -9,6 +9,7 @@ env:
   ECR_REPOSITORY: laravel/hello-laravel
   ECS_CLUSTER: laravel-cluster
   ECS_SERVICE: laravel-service
+  DOCKERFILE_PATH: docker/php/Dockerfile
 
 jobs:
   deploy:
@@ -19,7 +20,6 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # Configure AWS credentials
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -31,12 +31,58 @@ jobs:
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v1
 
-      # Docker build steps would go here...
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
 
-      - name: Install jq
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          driver-opts: |
+            image=moby/buildkit:master
+          install: true
+
+      - name: Create builder instance
+        id: buildx
+        run: |
+          docker buildx create \
+            --name mybuilder \
+            --driver docker-container \
+            --use
+          docker buildx inspect --bootstrap
+
+      - name: Build Docker image with cache
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        run: |
+          docker buildx build \
+            --file ${{ env.DOCKERFILE_PATH }} \
+            --tag $ECR_REGISTRY/$ECR_REPOSITORY:${{ github.sha }} \
+            --tag $ECR_REGISTRY/$ECR_REPOSITORY:latest \
+            --platform linux/amd64 \
+            --output type=image,push=false \
+            --cache-from type=gha \
+            --cache-to type=gha,mode=max \
+            --progress plain \
+            .
+
+      - name: Push Docker image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        run: |
+          docker buildx build \
+            --file ${{ env.DOCKERFILE_PATH }} \
+            --tag $ECR_REGISTRY/$ECR_REPOSITORY:${{ github.sha }} \
+            --tag $ECR_REGISTRY/$ECR_REPOSITORY:latest \
+            --platform linux/amd64 \
+            --push \
+            .
+
+      # Rest of your deployment steps (task definition, ECS deploy, etc.)
+      - name: Install dependencies for task definition
         run: sudo apt-get update && sudo apt-get install -y jq
 
-      - name: Create task definition
+      - name: Generate task definition
+        id: task-def
         run: |
           cat <<EOF > task-definition.json
           {
@@ -75,16 +121,12 @@ jobs:
             "memory": "2048"
           }
           EOF
-
-          # Validate task definition
-          jq . task-definition.json > /dev/null || (echo "Invalid task definition JSON" && exit 1)
-          [ -n "$(jq -r '.executionRoleArn' task-definition.json)" ] || (echo "Execution role ARN is required" && exit 1)
+          echo "TASK_DEFINITION=$(cat task-definition.json | jq -c)" >> $GITHUB_OUTPUT
 
       - name: Deploy to ECS
         uses: aws-actions/amazon-ecs-deploy-task-definition@v1
         with:
-          task-definition: task-definition.json
+          task-definition: ${{ steps.task-def.outputs.TASK_DEFINITION }}
           cluster: ${{ env.ECS_CLUSTER }}
           service: ${{ env.ECS_SERVICE }}
           wait-for-service-stability: true
-          force-new-deployment: true
