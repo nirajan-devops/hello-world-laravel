@@ -9,7 +9,6 @@ env:
   ECR_REPOSITORY: laravel/hello-laravel
   ECS_CLUSTER: laravel-cluster
   ECS_SERVICE: laravel-service
-  AWS_SDK_LOAD_CONFIG: 1  # Add this to address SDK warning
 
 jobs:
   deploy:
@@ -20,15 +19,13 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # Configure AWS credentials (MUST come before ECR login and ECS deploy)
+      # Configure AWS credentials
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
-          role-to-assume: ${{ secrets.AWS_IAM_ROLE }}  # If using IAM roles
-          role-session-name: GitHubActions-${{ github.run_id }}
 
       - name: Login to Amazon ECR
         id: login-ecr
@@ -46,7 +43,6 @@ jobs:
             "family": "laravel-task",
             "networkMode": "awsvpc",
             "executionRoleArn": "${{ secrets.ECS_TASK_EXECUTION_ROLE_ARN }}",
-            "taskRoleArn": "${{ secrets.ECS_TASK_ROLE_ARN }}",
             "containerDefinitions": [
               {
                 "name": "laravel-app",
@@ -80,14 +76,9 @@ jobs:
           }
           EOF
 
-      # Re-configure AWS credentials right before ECS deploy
-      - name: Refresh AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ env.AWS_REGION }}
-          role-to-assume: ${{ secrets.AWS_IAM_ROLE }}  # If using IAM roles
+          # Validate task definition
+          jq . task-definition.json > /dev/null || (echo "Invalid task definition JSON" && exit 1)
+          [ -n "$(jq -r '.executionRoleArn' task-definition.json)" ] || (echo "Execution role ARN is required" && exit 1)
 
       - name: Deploy to ECS
         uses: aws-actions/amazon-ecs-deploy-task-definition@v1
@@ -97,4 +88,3 @@ jobs:
           service: ${{ env.ECS_SERVICE }}
           wait-for-service-stability: true
           force-new-deployment: true
-          enable-rollback: true
