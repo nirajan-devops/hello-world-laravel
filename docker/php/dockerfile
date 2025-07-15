@@ -1,9 +1,18 @@
 # docker/php/Dockerfile  — production target
 # ---------- builder stage ----------
-FROM composer:2.7 as composer
+FROM composer:2.7 AS composer
 WORKDIR /app
-COPY composer.json composer.lock ./
+
+# 1) Install extensions Composer will need
+RUN apk add --no-cache icu-data-full icu-dev zlib libzip-dev \
+ && docker-php-ext-install intl pdo_mysql
+
+# 2) Copy manifest & (optionally) lock file
+COPY composer.json composer.lock* ./
+
+# 3) Install production deps
 RUN composer install --no-dev --prefer-dist --optimize-autoloader --no-interaction
+
 
 # ---------- runtime stage ----------
 FROM php:8.2-fpm-alpine
