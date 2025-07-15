@@ -1,0 +1,119 @@
+name: Build & Deploy Laravel to EC2 via ECR
+
+on:
+  push:
+    branches: [ main ]
+
+env:
+  AWS_REGION: ap-south-1                      # ⬅ change if needed
+  ECR_REPO:  laravel/hello-laravel                   # ⬅ your ECR repo name
+  IMAGE_TAG: ${{ github.sha }}               # use commit SHA for immutability
+
+jobs:
+  build-push:
+    runs-on: ubuntu-latest
+    permissions:
+      #id-token: write        # for OIDC (comment if using access keys)
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # ---------- AWS AUTH (choose ONE) ----------
+      # Preferred: OIDC (no long-lived secrets)
+      #- name: Configure AWS credentials (OIDC)
+        #uses: aws-actions/configure-aws-credentials@v4
+        #with:
+          #aws-region: ${{ env.AWS_REGION }}
+          #role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+
+      # ─── OR ───
+      # If you prefer static keys, comment the block above and UNcomment this:
+      - name: Configure AWS credentials (keys)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: ${{ env.AWS_REGION }}
+          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+
+      # ---------- LOGIN TO ECR ----------
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      # ---------- BUILD + PUSH ----------
+      - name: Build & push image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: docker/php/Dockerfile           # path to your production Dockerfile
+          push: true
+          tags: |
+            ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPO }}:${{ env.IMAGE_TAG }}
+            ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPO }}:latest
+
+  deploy:
+    needs: build-push
+    runs-on: ubuntu-latest
+    steps:
+      # ---------- UPLOAD COMPOSE + CONFIGS TO EC2 ----------
+      - name: Copy artefacts to EC2
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host:       ${{ secrets.SSH_HOST }}
+          username:   ${{ secrets.SSH_USER }}
+          key:        ${{ secrets.SSH_KEY }}
+          source: |
+            docker-compose.yml,
+            docker/nginx/default.conf,
+            .env
+          target: /home/${{ secrets.SSH_USER }}/deploy
+          overwrite: true
+
+      # ---------- BOOTSTRAP & DEPLOY ----------
+      - name: Bootstrap & Deploy on EC2
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host:     ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key:      ${{ secrets.SSH_KEY }}
+          envs:     AWS_REGION,AWS_ECR_REGISTRY,ECR_REPO,IMAGE_TAG
+          script: |
+            set -e
+            echo "== 0) Ensure base packages =="
+            if ! command -v docker >/dev/null 2>&1; then
+              sudo apt-get update -y
+              sudo apt-get install -y docker.io
+              sudo systemctl enable --now docker
+            fi
+            if ! docker compose version >/dev/null 2>&1; then
+              sudo mkdir -p /usr/local/lib/docker/cli-plugins
+              sudo curl -fsSL \
+                https://github.com/docker/compose/releases/download/v2.29.2/docker-compose-linux-x86_64 \
+                -o /usr/local/lib/docker/cli-plugins/docker-compose
+              sudo chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
+            fi
+            if ! command -v aws >/dev/null 2>&1; then
+              sudo apt-get install -y awscli
+            fi
+            if ! id -nG | grep -qw docker; then
+              sudo usermod -aG docker $USER
+            fi
+
+            echo "== 1) Sync artefacts into /opt/hello-world-laravel =="
+            sudo mkdir -p /opt/hello-world-laravel
+            sudo chown -R $USER:$USER /opt/hello-world-laravel
+            rsync -a --delete ~/deploy/ /opt/hello-world-laravel/
+            cd /opt/hello-world-laravel
+
+            echo "== 2) ECR login & pull image =="
+            aws ecr get-login-password --region $AWS_REGION \
+              | docker login -u AWS --password-stdin ${{ secrets.AWS_ECR_REGISTRY }}
+            docker compose -f docker-compose.prod.yml pull
+
+            echo "== 3) Start / update services =="
+            docker compose -f docker-compose.prod.yml up -d --remove-orphans
+            docker image prune -f
+
+            echo "== 4) Stack status =="
+            docker compose ps
