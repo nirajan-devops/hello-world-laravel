@@ -40,7 +40,7 @@ jobs:
           target: /home/${{ secrets.USERNAME }}/deploy
           overwrite: true
 
-      # (Optional) ─ copy any other project files you want on the VM
+      ## (Optional) ─ copy any other project files you want on the VM
       # e.g. cron jobs, scripts, etc.
 
       # 5️⃣ SSH in, load image, & start / update the stack
