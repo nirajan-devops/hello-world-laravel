@@ -9,6 +9,7 @@ env:
   ECR_REPOSITORY: laravel/hello-laravel
   ECS_CLUSTER: laravel-cluster
   ECS_SERVICE: laravel-service
+  AWS_SDK_LOAD_CONFIG: 1  # Add this to address SDK warning
 
 jobs:
   deploy:
@@ -16,18 +17,36 @@ jobs:
     environment: production
 
     steps:
-      # Previous steps (checkout, AWS login, Docker build/push) remain the same...
-      
-      - name: Install jq for JSON processing
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # Configure AWS credentials (MUST come before ECR login and ECS deploy)
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-to-assume: ${{ secrets.AWS_IAM_ROLE }}  # If using IAM roles
+          role-session-name: GitHubActions-${{ github.run_id }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v1
+
+      # Docker build steps would go here...
+
+      - name: Install jq
         run: sudo apt-get update && sudo apt-get install -y jq
 
-      - name: Create task definition file
+      - name: Create task definition
         run: |
           cat <<EOF > task-definition.json
           {
             "family": "laravel-task",
             "networkMode": "awsvpc",
             "executionRoleArn": "${{ secrets.ECS_TASK_EXECUTION_ROLE_ARN }}",
+            "taskRoleArn": "${{ secrets.ECS_TASK_ROLE_ARN }}",
             "containerDefinitions": [
               {
                 "name": "laravel-app",
@@ -61,6 +80,15 @@ jobs:
           }
           EOF
 
+      # Re-configure AWS credentials right before ECS deploy
+      - name: Refresh AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-to-assume: ${{ secrets.AWS_IAM_ROLE }}  # If using IAM roles
+
       - name: Deploy to ECS
         uses: aws-actions/amazon-ecs-deploy-task-definition@v1
         with:
@@ -69,3 +97,4 @@ jobs:
           service: ${{ env.ECS_SERVICE }}
           wait-for-service-stability: true
           force-new-deployment: true
+          enable-rollback: true
