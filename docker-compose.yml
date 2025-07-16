@@ -2,7 +2,7 @@ version: "3.8"
 
 services:
   php-fpm:
-    image: 405045611801.dkr.ecr.ap-south-1.amazonaws.com/laravel-hello:latest
+    image: hello-laravel:latest
     # mount only what must be writable/persistent
     volumes:
       - storage:/var/www/storage
