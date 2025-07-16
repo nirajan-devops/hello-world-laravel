@@ -52,9 +52,9 @@ jobs:
             mkdir -p $HOME/deploy
 
             # --- write .env from GitHub secret ---
-            cat <<'EOF' > $HOME/deploy/.env
-          ${{ secrets.LARAVEL_ENV }}
-          EOF
+            cat > "$HOME/deploy/.env" <<'EOF'
+            ${{ secrets.LARAVEL_ENV }}
+            EOF
 
             cd $HOME/deploy
 
