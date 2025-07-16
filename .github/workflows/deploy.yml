@@ -74,6 +74,7 @@ jobs:
 
             echo "=== Load the new Laravel image ==="
             gunzip -c hello-laravel.tar.gz | sudo docker load
+            sudo docker pull nginx:alpine
 
             echo "=== Bring containers up (or recreate) ==="
             sudo docker compose -f docker-compose.yml up -d --pull=never --remove-orphans
