@@ -13,7 +13,6 @@ services:
     ports:
       - "80:80"                      # EC2’s security‑group maps 80→80
     volumes:
-      - ./public:/var/www/public:ro  # serve static assets
       - ./docker/nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
     depends_on: [php-fpm]
     networks: [laravel]
