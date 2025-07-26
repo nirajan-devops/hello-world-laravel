@@ -11,7 +11,7 @@ jobs:
       image-name: laravel-hello-app
       container-name: laravel-hello-app
       port: "3000"
-      container-port: "9000"
+      container-port: "8000"
     secrets:
       HOST: ${{ secrets.HOST }}
       USERNAME: ${{ secrets.USERNAME }}
