@@ -37,7 +37,6 @@ RUN cp .env.example .env \
  && php artisan config:cache \
  && ./vendor/bin/phpunit
 
----
 
 ### Stage 2: Production Image
 FROM php:8.2-fpm-alpine AS production
