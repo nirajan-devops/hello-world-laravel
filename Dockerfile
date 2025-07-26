@@ -1,84 +1,47 @@
-# Stage 1: Builder
-FROM php:8.2-fpm-alpine AS builder
+FROM php:8.2-fpm
 
+# Set working directory
 WORKDIR /var/www
 
-# Install system dependencies and PHP extensions
-RUN apk add --no-cache \
-    bash \
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    build-essential \
     libpng-dev \
-    libjpeg-turbo-dev \
-    libzip-dev \
-    icu-dev \
-    oniguruma-dev \
+    libjpeg-dev \
+    libonig-dev \
     libxml2-dev \
-    sqlite \
-    sqlite-dev \
     zip \
     unzip \
     curl \
+    sqlite3 \
+    libsqlite3-dev \
     git \
-    g++ \
-    make \
-    autoconf
-
-RUN docker-php-ext-configure zip
-RUN docker-php-ext-install pdo pdo_mysql pdo_sqlite mbstring zip intl xml
+    && docker-php-ext-install pdo pdo_mysql pdo_sqlite mbstring zip xml intl
 
 # Install Composer
-COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
+COPY --from=composer:latest /usr/bin/composer /usr/bin/composer
 
 # Copy app files
 COPY . .
 
-# Prepare Laravel
-COPY .env.example .env
-
+# Set permissions
 RUN mkdir -p storage bootstrap/cache database \
     && touch database/database.sqlite \
-    && chmod -R 775 storage bootstrap/cache database
+    && chmod -R 775 storage bootstrap/cache database \
+    && chown -R www-data:www-data .
 
-RUN composer install --no-interaction --prefer-dist
+# Install PHP dependencies
+RUN composer install --no-dev --no-interaction --prefer-dist --optimize-autoloader
 
-RUN php artisan key:generate \
-    && php artisan config:cache
+# Set environment
+COPY .env.example .env
 
-# Stage 2: Production Image
-FROM php:8.2-fpm-alpine
+# Generate app key
+RUN php artisan key:generate
 
-WORKDIR /var/www
+# Run migrations (optional; skip if no tables needed at start)
+RUN php artisan migrate --force || true
 
-# Install prod system dependencies and PHP extensions
-RUN apk add --no-cache \
-    bash \
-    libpng-dev \
-    libjpeg-turbo-dev \
-    libzip-dev \
-    icu-dev \
-    oniguruma-dev \
-    libxml2-dev \
-    sqlite \
-    sqlite-dev \
-    zip \
-    unzip \
-    curl \
-    git \
-    g++ \
-    make \
-    autoconf
-
-RUN docker-php-ext-configure zip
-RUN docker-php-ext-install pdo pdo_mysql pdo_sqlite mbstring zip intl xml
-
-COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
-
-# Copy built app from builder
-COPY --from=builder /var/www /var/www
-
-# Set correct permissions
-RUN chmod -R 775 storage bootstrap/cache database
-
-RUN php artisan config:cache
-
+# Expose port and run app
 EXPOSE 8000
-CMD ["php", "artisan", "serve", "--host=0.0.0.0", "--port=8000"]
+CMD ["php", "-S", "0.0.0.0:8000", "-t", "public"]
