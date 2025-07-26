@@ -1,11 +1,21 @@
-name: Reuse Laravel CI Workflow
+name: Deploy Dockerized App    # ##This workflow deploys a Dockerized application to an EC2 instance using GitHub Actions.
 
 on:
   push:
     branches: [main]
-  pull_request:
-    branches: [main]
 
 jobs:
-  call-laravel-ci:
-    uses: nirajan-devops/ci-workflows/.github/workflows/laravel.yml@main
+  deploy:
+    uses: nirajan-devops/ci-workflows/.github/workflows/cicd.yml@main
+    with:
+      image-name: laravel-hello-app
+      container-name: laravel-hello-app
+      port: "3000"
+      container-port: "9000"
+    secrets:
+      HOST: ${{ secrets.HOST }}
+      USERNAME: ${{ secrets.USERNAME }}
+      SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+      SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+      GHCR_USERNAME: ${{ secrets.GHCR_USERNAME }}
+      GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
