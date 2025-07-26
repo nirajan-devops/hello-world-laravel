@@ -43,14 +43,18 @@ FROM php:8.2-fpm-alpine AS production
 
 # Install system dependencies again (required in prod too)
 RUN apk add --no-cache \
-    libpng \
-    libjpeg-turbo \
-    libzip \
-    oniguruma \
-    icu \
-    libxml2 \
+    libpng-dev \
+    libjpeg-turbo-dev \
+    libzip-dev \
+    oniguruma-dev \
+    icu-dev \
+    libxml2-dev \
     zip \
-    unzip
+    unzip \
+    bash \
+    curl \
+    git \
+    icu
 
 # PHP extensions again
 RUN docker-php-ext-install pdo pdo_mysql zip mbstring intl
