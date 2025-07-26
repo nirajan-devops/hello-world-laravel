@@ -1,104 +1,89 @@
-# ──────────────────────────────────────────────────────────────────────────────
-# Stage 1: Build and test Laravel app
-# ──────────────────────────────────────────────────────────────────────────────
+# Stage 1: Builder
 FROM php:8.2-fpm-alpine AS builder
 
 # Set working directory
 WORKDIR /var/www
 
-# Install system dependencies
+# Install system dependencies and PHP extensions
 RUN apk add --no-cache \
-    curl \
-    zip \
-    unzip \
-    libpng \
+    bash \
     libpng-dev \
+    libjpeg-turbo-dev \
+    libzip-dev \
+    icu-dev \
     oniguruma-dev \
     libxml2-dev \
-    icu-dev \
-    zlib-dev \
+    zip \
+    unzip \
+    curl \
+    git \
     g++ \
     make \
-    autoconf \
-    bash \
-    icu-libs \
-    libzip-dev \
-    libjpeg-turbo-dev \
-    libxslt-dev
+    autoconf
 
-# Install PHP extensions
-RUN docker-php-ext-install pdo pdo_mysql mbstring zip xml intl
+RUN docker-php-ext-configure zip
+RUN docker-php-ext-install pdo pdo_mysql mbstring zip intl xml
 
 # Install Composer
-COPY --from=composer:2.7 /usr/bin/composer /usr/bin/composer
+COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
 
-# Copy only composer files and install dependencies with dev tools
-COPY composer.json composer.lock ./
-RUN composer install --no-interaction --prefer-dist
-
-# Copy the rest of the application
+# Copy app files
 COPY . .
 
-# Ensure .env exists and cache dirs are writable
+# Setup Laravel for production build
 COPY .env.example .env
-RUN chmod -R 775 storage bootstrap/cache
 
-# Set application key and cache config
+# Ensure cache dirs exist
+RUN mkdir -p storage bootstrap/cache \
+    && chmod -R 775 storage bootstrap/cache
+
+# Install PHP dependencies (with dev for testing)
+RUN composer install --no-interaction --prefer-dist
+
+# Generate app key and config cache
 RUN php artisan key:generate \
- && php artisan config:cache
+    && php artisan config:cache
 
-# Run tests
-RUN ./vendor/bin/phpunit
+# Optionally run tests
+# RUN ./vendor/bin/phpunit
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Stage 2: Production-ready image
-# ──────────────────────────────────────────────────────────────────────────────
-FROM php:8.2-fpm-alpine AS production
+# Stage 2: Production Image
+FROM php:8.2-fpm-alpine
 
 # Set working directory
 WORKDIR /var/www
 
-# Install system dependencies
+# Install prod system deps and PHP extensions
 RUN apk add --no-cache \
-    curl \
-    zip \
-    unzip \
-    libpng \
+    bash \
     libpng-dev \
+    libjpeg-turbo-dev \
+    libzip-dev \
+    icu-dev \
     oniguruma-dev \
     libxml2-dev \
-    icu-dev \
-    zlib-dev \
+    zip \
+    unzip \
+    curl \
+    git \
     g++ \
     make \
-    autoconf \
-    bash \
-    icu-libs \
-    libzip-dev \
-    libjpeg-turbo-dev \
-    libxslt-dev
+    autoconf
 
-# Install PHP extensions
-RUN docker-php-ext-install pdo pdo_mysql mbstring zip xml intl
+RUN docker-php-ext-configure zip
+RUN docker-php-ext-install pdo pdo_mysql mbstring zip intl xml
 
-# Install Composer
-COPY --from=composer:2.7 /usr/bin/composer /usr/bin/composer
+# Install Composer again (in production)
+COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
 
-# Copy only composer files and install prod-only dependencies
-COPY composer.json composer.lock ./
-COPY .env.example .env
-RUN mkdir -p storage bootstrap/cache \
- && chmod -R 775 storage bootstrap/cache \
- && composer install --no-dev --no-interaction --prefer-dist --optimize-autoloader
+# Copy only necessary files from builder
+COPY --from=builder /var/www /var/www
 
-# Copy application code (excluding vendor from builder)
-COPY . .
-
-# Cache configuration (optional in prod)
+# Re-cache Laravel config
 RUN php artisan config:cache
 
-# Expose port (php-fpm default)
-EXPOSE 9000
+# Set proper permissions
+RUN chmod -R 775 storage bootstrap/cache
 
-# Start PHP-FPM
+EXPOSE 9000
 CMD ["php-fpm"]
