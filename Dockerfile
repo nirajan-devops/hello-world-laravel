@@ -1,48 +1,42 @@
-# ------------------------------------
-# STAGE 1 – Build & Test
-# ------------------------------------
-FROM php:8.2-fpm AS build
+# Stage 1: Test and Build
+FROM php:8.2-fpm AS builder
 
-# System dependencies
+# Install dependencies
 RUN apt-get update && apt-get install -y \
-    git unzip curl libpng-dev libonig-dev libxml2-dev zip libzip-dev \
-    && docker-php-ext-install pdo pdo_mysql zip
+    unzip git curl zip libzip-dev libpng-dev libonig-dev libxml2-dev \
+    && docker-php-ext-install pdo pdo_mysql zip gd
 
-# Install Composer
-COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
-
-# Set working directory
 WORKDIR /var/www
 
-# Copy project files
+# Copy app files
 COPY . .
 
-# Install PHP dependencies
+# Install Composer
+RUN curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/local/bin --filename=composer
+
+# Install PHP deps
 RUN composer install --no-interaction --prefer-dist --optimize-autoloader
 
-# Run Laravel tests
-RUN php artisan key:generate \
- && php artisan config:cache \
- && ./vendor/bin/phpunit
+# Set env and cache config
+COPY .env.example .env
+RUN php artisan key:generate
+RUN php artisan config:cache
 
-# ------------------------------------
-# STAGE 2 – Production-ready image
-# ------------------------------------
-FROM php:8.2-fpm AS production
+# Run tests
+RUN ./vendor/bin/phpunit
 
-# System dependencies
-RUN apt-get update && apt-get install -y \
-    libpng-dev libonig-dev libxml2-dev zip libzip-dev unzip \
-    && docker-php-ext-install pdo pdo_mysql zip
+# Stage 2: Final clean image
+FROM php:8.2-fpm
 
-# Set working directory
 WORKDIR /var/www
 
-# Copy app from builder stage, excluding vendor/bin/phpunit, .env, etc.
-COPY --from=build /var/www /var/www
+# Install PHP extensions again (required for runtime)
+RUN apt-get update && apt-get install -y \
+    unzip git curl zip libzip-dev libpng-dev libonig-dev libxml2-dev \
+    && docker-php-ext-install pdo pdo_mysql zip gd
 
-# Expose port
+# Copy files from build image
+COPY --from=builder /var/www /var/www
+
 EXPOSE 9000
-
-# Run PHP-FPM
 CMD ["php-fpm"]
