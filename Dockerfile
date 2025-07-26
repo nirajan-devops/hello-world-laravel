@@ -1,7 +1,6 @@
 # Stage 1: Builder
 FROM php:8.2-fpm-alpine AS builder
 
-# Set working directory
 WORKDIR /var/www
 
 # Install system dependencies and PHP extensions
@@ -13,6 +12,8 @@ RUN apk add --no-cache \
     icu-dev \
     oniguruma-dev \
     libxml2-dev \
+    sqlite \
+    sqlite-dev \
     zip \
     unzip \
     curl \
@@ -22,7 +23,7 @@ RUN apk add --no-cache \
     autoconf
 
 RUN docker-php-ext-configure zip
-RUN docker-php-ext-install pdo pdo_mysql mbstring zip intl xml
+RUN docker-php-ext-install pdo pdo_mysql pdo_sqlite mbstring zip intl xml
 
 # Install Composer
 COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
@@ -30,30 +31,24 @@ COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
 # Copy app files
 COPY . .
 
-# Setup Laravel for production build
+# Prepare Laravel
 COPY .env.example .env
 
-# Ensure cache dirs exist
-RUN mkdir -p storage bootstrap/cache \
-    && chmod -R 775 storage bootstrap/cache
+RUN mkdir -p storage bootstrap/cache database \
+    && touch database/database.sqlite \
+    && chmod -R 775 storage bootstrap/cache database
 
-# Install PHP dependencies (with dev for testing)
 RUN composer install --no-interaction --prefer-dist
 
-# Generate app key and config cache
 RUN php artisan key:generate \
     && php artisan config:cache
-
-# Optionally run tests
-# RUN ./vendor/bin/phpunit
 
 # Stage 2: Production Image
 FROM php:8.2-fpm-alpine
 
-# Set working directory
 WORKDIR /var/www
 
-# Install prod system deps and PHP extensions
+# Install prod system dependencies and PHP extensions
 RUN apk add --no-cache \
     bash \
     libpng-dev \
@@ -62,6 +57,8 @@ RUN apk add --no-cache \
     icu-dev \
     oniguruma-dev \
     libxml2-dev \
+    sqlite \
+    sqlite-dev \
     zip \
     unzip \
     curl \
@@ -71,19 +68,17 @@ RUN apk add --no-cache \
     autoconf
 
 RUN docker-php-ext-configure zip
-RUN docker-php-ext-install pdo pdo_mysql mbstring zip intl xml
+RUN docker-php-ext-install pdo pdo_mysql pdo_sqlite mbstring zip intl xml
 
-# Install Composer again (in production)
 COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
 
-# Copy only necessary files from builder
+# Copy built app from builder
 COPY --from=builder /var/www /var/www
 
-# Re-cache Laravel config
-RUN php artisan config:cache
+# Set correct permissions
+RUN chmod -R 775 storage bootstrap/cache database
 
-# Set proper permissions
-RUN chmod -R 775 storage bootstrap/cache
+RUN php artisan config:cache
 
 EXPOSE 8000
 CMD ["php", "artisan", "serve", "--host=0.0.0.0", "--port=8000"]
