@@ -32,13 +32,27 @@ RUN chmod -R 775 storage bootstrap/cache \
 # Run tests
 RUN ./vendor/bin/phpunit
 
-
 # Stage 2: Production image
 FROM php:8.2-fpm-alpine
 
-RUN apk add --no-cache libpng libzip bash curl
+# Install system dependencies first
+RUN apk add --no-cache \
+    bash \
+    libpng \
+    libzip \
+    zip \
+    unzip \
+    curl \
+    oniguruma \
+    libxml2 \
+    libzip-dev \
+    zlib-dev \
+    icu-dev \
+    g++ \
+    make \
+    autoconf
 
-# PHP extensions
+# Install PHP extensions (with correct dependencies installed)
 RUN docker-php-ext-install pdo pdo_mysql zip
 
 # Set working dir
@@ -51,3 +65,4 @@ COPY --from=builder /var/www /var/www
 RUN chmod -R 775 storage bootstrap/cache
 
 CMD ["php-fpm"]
+
