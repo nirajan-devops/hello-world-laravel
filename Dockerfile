@@ -1,42 +1,53 @@
-# Stage 1: Test and Build
-FROM php:8.2-fpm AS builder
+# Stage 1: Build and test
+FROM php:8.2-fpm-alpine AS builder
 
-# Install dependencies
-RUN apt-get update && apt-get install -y \
-    unzip git curl zip libzip-dev libpng-dev libonig-dev libxml2-dev \
-    && docker-php-ext-install pdo pdo_mysql zip gd
+# System deps
+RUN apk add --no-cache bash libpng-dev libzip-dev zip unzip curl git
 
-WORKDIR /var/www
-
-# Copy app files
-COPY . .
+# PHP extensions
+RUN docker-php-ext-install pdo pdo_mysql zip
 
 # Install Composer
-RUN curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/local/bin --filename=composer
+COPY --from=composer:latest /usr/bin/composer /usr/bin/composer
 
-# Install PHP deps
-RUN composer install --no-interaction --prefer-dist --optimize-autoloader
+# Set working directory
+WORKDIR /var/www
 
-# Set env and cache config
+# Copy everything
+COPY . .
+
+# Install dependencies
+RUN composer install --prefer-dist --no-dev --no-interaction --optimize-autoloader
+
+# Set env
 COPY .env.example .env
+
+# Generate app key
 RUN php artisan key:generate
-RUN php artisan config:cache
+
+# Cache config
+RUN chmod -R 775 storage bootstrap/cache \
+ && php artisan config:cache
 
 # Run tests
 RUN ./vendor/bin/phpunit
 
-# Stage 2: Final clean image
-FROM php:8.2-fpm
 
+# Stage 2: Production image
+FROM php:8.2-fpm-alpine
+
+RUN apk add --no-cache libpng libzip bash curl
+
+# PHP extensions
+RUN docker-php-ext-install pdo pdo_mysql zip
+
+# Set working dir
 WORKDIR /var/www
 
-# Install PHP extensions again (required for runtime)
-RUN apt-get update && apt-get install -y \
-    unzip git curl zip libzip-dev libpng-dev libonig-dev libxml2-dev \
-    && docker-php-ext-install pdo pdo_mysql zip gd
-
-# Copy files from build image
+# Copy app from builder stage
 COPY --from=builder /var/www /var/www
 
-EXPOSE 9000
+# Set correct permissions
+RUN chmod -R 775 storage bootstrap/cache
+
 CMD ["php-fpm"]
