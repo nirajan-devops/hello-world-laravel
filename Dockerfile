@@ -8,7 +8,6 @@ WORKDIR /var/www
 
 # Install system dependencies
 RUN apk add --no-cache \
-    git \
     curl \
     zip \
     unzip \
@@ -21,7 +20,11 @@ RUN apk add --no-cache \
     g++ \
     make \
     autoconf \
-    bash
+    bash \
+    icu-libs \
+    libzip-dev \
+    libjpeg-turbo-dev \
+    libxslt-dev
 
 # Install PHP extensions
 RUN docker-php-ext-install pdo pdo_mysql mbstring zip xml intl
@@ -66,7 +69,14 @@ RUN apk add --no-cache \
     libxml2-dev \
     icu-dev \
     zlib-dev \
-    bash
+    g++ \
+    make \
+    autoconf \
+    bash \
+    icu-libs \
+    libzip-dev \
+    libjpeg-turbo-dev \
+    libxslt-dev
 
 # Install PHP extensions
 RUN docker-php-ext-install pdo pdo_mysql mbstring zip xml intl
