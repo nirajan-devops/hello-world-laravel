@@ -1,68 +1,58 @@
-# Stage 1: Build and test
-FROM php:8.2-fpm-alpine AS builder
+# ------------------------------------
+# Stage 0: PHP base with extensions
+# ------------------------------------
+FROM php:8.2-fpm-alpine AS php-base
 
-# System deps
-RUN apk add --no-cache bash libpng-dev libzip-dev zip unzip curl git
+RUN apk add --no-cache \
+      bash git curl icu-dev oniguruma libzip-dev libpng-dev libjpeg-turbo-dev libxml2-dev zlib-dev \
+  && docker-php-ext-install intl pdo_mysql zip opcache
 
-# PHP extensions
-RUN docker-php-ext-install pdo pdo_mysql zip
-
-# Install Composer
-COPY --from=composer:latest /usr/bin/composer /usr/bin/composer
-
-# Set working directory
 WORKDIR /var/www
 
-# Copy everything
+# ------------------------------------
+# Stage 1: Build & Test (with dev deps)
+# ------------------------------------
+FROM php-base AS build
+
+# Bring in Composer
+COPY --from=composer:2.7 /usr/bin/composer /usr/bin/composer
+
+# Copy only composer manifests first (better caching)
+COPY composer.json composer.lock ./
+RUN composer install --no-interaction --prefer-dist --optimize-autoloader
+
+# Copy source
 COPY . .
 
-# Install dependencies
-RUN composer install --prefer-dist --no-dev --no-interaction --optimize-autoloader
-
-# Set env
-COPY .env.example .env
-
-# Generate app key
-RUN php artisan key:generate
-
-# Cache config
-RUN chmod -R 775 storage bootstrap/cache \
+# Prepare app for testing
+RUN cp .env.example .env \
+ && php artisan key:generate \
+ && chmod -R 775 storage bootstrap/cache \
  && php artisan config:cache
 
-# Run tests
-RUN ./vendor/bin/phpunit
+# Run the test suite (use artisan so it works with Pest or PHPUnit)
+RUN php artisan test --no-interaction --without-tty
 
-# Stage 2: Production image
-FROM php:8.2-fpm-alpine
+# ------------------------------------
+# Stage 2: Production image (no dev deps)
+# ------------------------------------
+FROM php-base AS production
 
-# Install system dependencies first
-RUN apk add --no-cache \
-    bash \
-    libpng \
-    libzip \
-    zip \
-    unzip \
-    curl \
-    oniguruma \
-    libxml2 \
-    libzip-dev \
-    zlib-dev \
-    icu-dev \
-    g++ \
-    make \
-    autoconf
+# Bring in Composer again to install prod deps only
+COPY --from=composer:2.7 /usr/bin/composer /usr/bin/composer
 
-# Install PHP extensions (with correct dependencies installed)
-RUN docker-php-ext-install pdo pdo_mysql zip
-
-# Set working dir
 WORKDIR /var/www
 
-# Copy app from builder stage
-COPY --from=builder /var/www /var/www
+# Copy manifests again and install prod deps
+COPY composer.json composer.lock ./
+RUN composer install --no-dev --no-interaction --prefer-dist --optimize-autoloader
 
-# Set correct permissions
-RUN chmod -R 775 storage bootstrap/cache
+# Now copy the *application code* (but not the vendor from build)
+COPY . .
 
+# Cache config, fix perms
+RUN php artisan config:cache \
+ && chmod -R 775 storage bootstrap/cache
+
+EXPOSE 9000
 CMD ["php-fpm"]
-
