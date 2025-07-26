@@ -1,81 +1,94 @@
-### Stage 1: Builder
+# ──────────────────────────────────────────────────────────────────────────────
+# Stage 1: Build and test Laravel app
+# ──────────────────────────────────────────────────────────────────────────────
 FROM php:8.2-fpm-alpine AS builder
+
+# Set working directory
+WORKDIR /var/www
 
 # Install system dependencies
 RUN apk add --no-cache \
     git \
     curl \
-    libpng-dev \
-    libjpeg-turbo-dev \
-    libzip-dev \
-    oniguruma-dev \
-    icu-dev \
-    bash \
-    libxml2-dev \
     zip \
-    unzip
+    unzip \
+    libpng \
+    libpng-dev \
+    oniguruma-dev \
+    libxml2-dev \
+    icu-dev \
+    zlib-dev \
+    g++ \
+    make \
+    autoconf \
+    bash
 
-# PHP extensions
-RUN docker-php-ext-install pdo pdo_mysql zip mbstring intl
+# Install PHP extensions
+RUN docker-php-ext-install pdo pdo_mysql mbstring zip xml intl
 
 # Install Composer
 COPY --from=composer:2.7 /usr/bin/composer /usr/bin/composer
 
-WORKDIR /var/www
-
-# Copy only manifest files and install dev dependencies
+# Copy only composer files and install dependencies with dev tools
 COPY composer.json composer.lock ./
 RUN composer install --no-interaction --prefer-dist
 
-# Copy full source
+# Copy the rest of the application
 COPY . .
 
-# Laravel setup
-RUN cp .env.example .env \
- && php artisan key:generate \
- && chmod -R 775 storage bootstrap/cache \
- && php artisan config:cache \
- && ./vendor/bin/phpunit
+# Ensure .env exists and cache dirs are writable
+COPY .env.example .env
+RUN chmod -R 775 storage bootstrap/cache
 
+# Set application key and cache config
+RUN php artisan key:generate \
+ && php artisan config:cache
 
-### Stage 2: Production Image
+# Run tests
+RUN ./vendor/bin/phpunit
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Stage 2: Production-ready image
+# ──────────────────────────────────────────────────────────────────────────────
 FROM php:8.2-fpm-alpine AS production
 
-# Install system dependencies again (required in prod too)
+# Set working directory
+WORKDIR /var/www
+
+# Install system dependencies
 RUN apk add --no-cache \
-    libpng-dev \
-    libjpeg-turbo-dev \
-    libzip-dev \
-    oniguruma-dev \
-    icu-dev \
-    libxml2-dev \
+    curl \
     zip \
     unzip \
-    bash \
-    curl \
-    git \
-    icu
+    libpng \
+    libpng-dev \
+    oniguruma-dev \
+    libxml2-dev \
+    icu-dev \
+    zlib-dev \
+    bash
 
-# PHP extensions again
-RUN docker-php-ext-install pdo pdo_mysql zip mbstring intl
+# Install PHP extensions
+RUN docker-php-ext-install pdo pdo_mysql mbstring zip xml intl
 
 # Install Composer
 COPY --from=composer:2.7 /usr/bin/composer /usr/bin/composer
 
-WORKDIR /var/www
-
-# Copy only manifest files again
+# Copy only composer files and install prod-only dependencies
 COPY composer.json composer.lock ./
+COPY .env.example .env
+RUN mkdir -p storage bootstrap/cache \
+ && chmod -R 775 storage bootstrap/cache \
+ && composer install --no-dev --no-interaction --prefer-dist --optimize-autoloader
 
-# 🔥 This is the line that was failing before
-RUN composer install --no-dev --no-interaction --prefer-dist --optimize-autoloader
-
-# Now copy application code (except vendor)
+# Copy application code (excluding vendor from builder)
 COPY . .
 
-# Laravel permissions & cache
-RUN chmod -R 775 storage bootstrap/cache \
- && php artisan config:cache
+# Cache configuration (optional in prod)
+RUN php artisan config:cache
 
+# Expose port (php-fpm default)
 EXPOSE 9000
+
+# Start PHP-FPM
 CMD ["php-fpm"]
